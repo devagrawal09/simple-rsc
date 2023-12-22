@@ -8,6 +8,7 @@ import * as ReactServerDom from 'react-server-dom-webpack/server.browser';
 import { readFile, writeFile } from 'node:fs/promises';
 import { parse } from 'es-module-lexer';
 import { relative } from 'node:path';
+import { WebSocketServer } from 'ws';
 
 const app = new Hono();
 const clientComponentMap = {};
@@ -162,3 +163,39 @@ function resolveBuild(path = '') {
 }
 
 const reactComponentRegex = /\.jsx$/;
+
+/** WEBSOCKET */
+const wss = new WebSocketServer({ port: 8080 });
+
+wss.on('connection', function connection(ws) {
+	ws.on('error', console.error);
+
+	ws.on('message', async function message(message) {
+		console.log('received: %s', message);
+
+		// Note This will raise a type error until you build with `npm run dev`
+		const Page = await import('./build/page.js');
+		// @ts-expect-error `Type '() => Promise<any>' is not assignable to type 'FunctionComponent<{}>'`
+		const Comp = createElement(Page.default, { input: 'worlddd' });
+
+		/**
+		 * @type {ReadableStream}
+		 */
+		const stream = ReactServerDom.renderToReadableStream(Comp, clientComponentMap);
+		const reader = stream.getReader();
+
+		const decoder = new TextDecoder();
+		let result = await reader.read();
+		let chunks = [];
+		while (!result.done) {
+			const chunk = decoder.decode(result.value, { stream: true });
+			chunks.push(chunk);
+			result = await reader.read();
+		}
+		const lastChunk = decoder.decode(result.value, { stream: false });
+		chunks.push(lastChunk);
+		const comp = chunks.join('');
+
+		ws.send(JSON.stringify({ comp }));
+	});
+});
